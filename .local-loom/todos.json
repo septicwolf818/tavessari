@@ -1,0 +1,26 @@
+[
+  {
+    "todo_id": "cb269a26",
+    "content": "Fix double-click on sidebar file to promote temp tab to permanent open tab",
+    "status": "in_progress",
+    "priority": "high",
+    "created_at": "2026-09-04T18:47:38.529391+00:00",
+    "updated_at": "2026-09-04T18:57:14.934446+00:00"
+  },
+  {
+    "todo_id": "902dcbee",
+    "content": "Check git history for the working version of double-click/sing-click sidebar logic",
+    "status": "pending",
+    "priority": "high",
+    "created_at": "2026-09-04T19:03:00.380414+00:00",
+    "updated_at": "2026-09-04T19:03:00.380423+00:00"
+  },
+  {
+    "todo_id": "b8f749ce",
+    "content": "Verify all behavior works correctly (syntax + logic review)",
+    "status": "pending",
+    "priority": "high",
+    "created_at": "2026-09-04T19:11:41.408986+00:00",
+    "updated_at": "2026-09-04T19:11:41.408996+00:00"
+  }
+]
