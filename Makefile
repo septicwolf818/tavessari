@@ -1,10 +1,13 @@
-.PHONY: setup run clean sys-deps
+.PHONY: setup run clean sys-deps install uninstall help
 
 PYTHON := python3
 VENV := .venv
 VENV_PYTHON := $(VENV)/bin/python
 VENV_PIP := $(VENV)/bin/pip
 APP_MAIN := main.py
+APP_NAME := text-editor
+APP_ID := pl.septicwolf818.TextEditor
+ICON_DIR := $(HOME)/.local/share/icons/hicolor/scalable/apps
 
 setup: $(VENV_PYTHON)
 
@@ -32,3 +35,43 @@ sys-deps:
 	else \
 		echo "Install manually: GTK4, libadwaita, gobject-introspection, cairo, pkg-config"; exit 1; \
 	fi
+
+PREFIX ?= $(HOME)/.local/share
+
+install: build
+	@echo "== installing to $(PREFIX) ..."
+	@rm -rf "$(PREFIX)/$(APP_NAME)"
+	@mkdir -p "$(PREFIX)/$(APP_NAME)"
+	@cp "$(APP_MAIN)" "$(PREFIX)/$(APP_NAME)/"
+	@python3 -m venv "$(PREFIX)/$(APP_NAME)/.venv"
+	@"$(PREFIX)/$(APP_NAME)/.venv/bin/python" -m pip install --upgrade pip
+	@"$(PREFIX)/$(APP_NAME)/.venv/bin/pip" install -r requirements.txt
+	@mkdir -p "$(PREFIX)/$(APP_NAME)/data"
+	@cp "data/text-editor.svg" "$(PREFIX)/$(APP_NAME)/data/"
+	@mkdir -p $(HOME)/.local/share/applications "$(ICON_DIR)"
+	@cat Makefile.desktop.tpl | sed 's|@@PREFIX@@|$(PREFIX)|g' > "$(HOME)/.local/share/applications/$(APP_ID).desktop"
+	@desktop-file-validate "$(HOME)/.local/share/applications/$(APP_ID).desktop"
+	@cp "data/text-editor.svg" "$(ICON_DIR)/$(APP_ID).svg"
+	@gtk-update-icon-cache -f "$(HOME)/.local/share/icons/hicolor" >/dev/null 2>&1 || true
+	@update-desktop-database "$(HOME)/.local/share/applications" >/dev/null 2>&1 || true
+	@echo "== Installed to $(PREFIX)"
+
+uninstall:
+	@echo "== uninstalling ..."
+	@rm -rf "$(PREFIX)/$(APP_NAME)"
+	@rm -f "$(HOME)/.local/share/applications/$(APP_ID).desktop"
+	@rm -f "$(ICON_DIR)/$(APP_ID).svg"
+	@gtk-update-icon-cache -f "$(HOME)/.local/share/icons/hicolor" >/dev/null 2>&1 || true
+	@update-desktop-database "$(HOME)/.local/share/applications" >/dev/null 2>&1 || true
+	@echo "== Uninstalled."
+
+build:
+	@echo "== build step =="
+
+help:
+	@echo "Targets:"
+	@echo "  build   - Build step"
+	@echo "  install - Install ($(PREFIX)/text-editor default)"
+	@echo "  uninstall - Remove installed files"
+	@echo ""
+	@echo "To install to /opt: sudo make install PREFIX=/opt"

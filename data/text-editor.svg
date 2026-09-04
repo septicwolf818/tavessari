@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="a" x1="12" y1="12" x2="116" y2="116" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2c8303"/>
+      <stop offset=".48" stop-color="#9191fc"/>
+      <stop offset="1" stop-color="#7790f5"/>
+    </linearGradient>
+  </defs>
+  <!-- Background -->
+  <rect x="10" y="10" width="108" height="108" rx="24" fill="#1e1e24"/>
+  <!-- Document (Vertical/Portrait) -->
+  <path d="M29 22 h54 l16 16 v64 a4 4 0 0 1 -4 4 h-62 a4 4 0 0 1 -4 -4 v-80 Z" fill="#d8dce6"/>
+  <!-- Folded corner -->
+  <path d="M83 22 v16 h16 l-16 -16 Z" fill="#a9b1c6"/>
+  <!-- Header bar on document -->
+  <rect x="35" y="34" width="44" height="8" rx="3" fill="url(#a)"/>
+  <!-- Text lines (syntax highlight style) -->
+  <rect x="35" y="53" width="44" height="4" rx="2" fill="#a9b1c6" opacity="0.8"/>
+  <rect x="35" y="63" width="50" height="4" rx="2" fill="#a9b1c6" opacity="0.6"/>
+  <rect x="35" y="73" width="38" height="4" rx="2" fill="#a9b1c6" opacity="0.4"/>
+  <rect x="35" y="83" width="46" height="4" rx="2" fill="#a9b1c6" opacity="0.5"/>
+  <!-- Pencil (pointing down, "/" orientation, raised) -->
+  <g transform="translate(83, 86) rotate(-135)">
+    <rect x="-3" y="-20" width="6" height="35" rx="1.5" fill="url(#a)"/>
+    <polygon points="-3,-20 3,-20 0,-26" fill="#d59446" opacity="0.9"/>
+    <rect x="-3" y="15" width="6" height="5" rx="0.5" fill="#fe7994"/>
+  </g>
+  <!-- AI Sparkle (small star at top right of doc) -->
+  <path d="M97 30 l2 5 5 2 -5 2 -2 5 -2 -5 -5 -2 5 -2 z" fill="url(#a)" opacity="0.9"/>
+</svg>
