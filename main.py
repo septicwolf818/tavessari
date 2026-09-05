@@ -20,6 +20,7 @@ from ai_controller import AICtrl
 from sidebar import FileBrowser
 from state_manager import StateManager
 from file_ops import FileOps
+from find_replace import FindReplace
 
 
 class EditorWindow(Adw.ApplicationWindow):
@@ -38,58 +39,65 @@ class EditorWindow(Adw.ApplicationWindow):
 
         # --- layout ---
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        self.set_content(vbox)
 
-        header = Adw.HeaderBar()
-        vbox.append(header)
+        # Set up toast overlay so we can use Adw.Toast for non-blocking messages
+        if not getattr(self, 'toast_overlay', None):
+            overlay = Adw.ToastOverlay()
+            overlay.set_child(vbox)
+            self.set_child(overlay)
+            self.toast_overlay = overlay
+
+
+        self.header_bar = Adw.HeaderBar()
+        vbox.append(self.header_bar)
 
         new_btn = Gtk.Button.new_from_icon_name("document-new-symbolic")
         new_btn.set_tooltip_text("New file (Ctrl+N)")
         new_btn.connect("clicked", self.file_ops.on_new)
-        header.pack_start(new_btn)
+        self.header_bar.pack_start(new_btn)
 
         open_btn = Gtk.Button.new_from_icon_name("document-open-symbolic")
         open_btn.set_tooltip_text("Open file (Ctrl+O)")
         open_btn.connect("clicked", self.file_ops.on_open)
-        header.pack_start(open_btn)
+        self.header_bar.pack_start(open_btn)
 
         save_btn = Gtk.Button.new_from_icon_name("document-save-symbolic")
         save_btn.set_tooltip_text("Save (Ctrl+S)")
         save_btn.connect("clicked", self.file_ops.on_save)
-        header.pack_start(save_btn)
+        self.header_bar.pack_start(save_btn)
 
         save_as_btn = Gtk.Button.new_from_icon_name("document-save-as-symbolic")
         save_as_btn.set_tooltip_text("Save As (Ctrl+Shift+S)")
         save_as_btn.connect("clicked", self.file_ops.on_save_as)
-        header.pack_start(save_as_btn)
+        self.header_bar.pack_start(save_as_btn)
 
         folder_btn = Gtk.Button.new_from_icon_name("folder-open-symbolic")
         folder_btn.set_tooltip_text("Open folder (Ctrl+Shift+O)")
         folder_btn.connect("clicked", lambda *_: self.file_browse.open_folder())
-        header.pack_start(folder_btn)
+        self.header_bar.pack_start(folder_btn)
 
         self.side_toggle = Gtk.ToggleButton(icon_name="view-paged-symbolic")
         self.side_toggle.set_tooltip_text("Show/hide file browser")
         self.side_toggle.set_active(True)
         self.side_toggle.connect("toggled", lambda *args: self.file_browse.on_side_toggle(*args))
         self.side_toggle.set_visible(False)
-        header.pack_start(self.side_toggle)
+        self.header_bar.pack_start(self.side_toggle)
 
         self.ln_toggle = Gtk.ToggleButton(label="1\u2261")
         self.ln_toggle.set_tooltip_text("Show/hide line numbers")
         self.ln_toggle.set_active(True)
         self.ln_toggle.connect("toggled", self.on_toggle_line_numbers)
-        header.pack_end(self.ln_toggle)
+        self.header_bar.pack_end(self.ln_toggle)
 
         self.wrap_toggle = Gtk.ToggleButton(label="↵")
         self.wrap_toggle.set_tooltip_text("Toggle word wrap")
         self.wrap_toggle.set_active(True)
         self.wrap_toggle.connect("toggled", self.on_toggle_wrap)
-        header.pack_end(self.wrap_toggle)
+        self.header_bar.pack_end(self.wrap_toggle)
 
         # AI menu built by AICtrl
         self._ai_ctrl = AICtrl(self)
-        self._ai_ctrl.build_ai_menu(header)
+        self._ai_ctrl.build_ai_menu(self.header_bar)
 
         # --- content: single container, swapped between editor-only and paned ---
         self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -155,6 +163,12 @@ class EditorWindow(Adw.ApplicationWindow):
 
         self._new_tab()
 
+        # --- Find & Replace -------------------------------------------
+        self.find_replace = FindReplace(self)
+
+        # Find button on the header bar (after find_replace so popover exists).
+        self._setup_find_button()
+
         self.update_title()
         self.update_status()
         self._update_lang_label()
@@ -168,12 +182,27 @@ class EditorWindow(Adw.ApplicationWindow):
             ("save", self.file_ops.on_save, "<Control>s"),
             ("save-as", self.file_ops.on_save_as, "<Control><Shift>s"),
             ("close-tab", self.on_close_tab, "<Control>w"),
-            ("open-folder", self.file_browse.open_folder, "<Control><Shift>o")
+            ("open-folder", self.file_browse.open_folder, "<Control><Shift>o"),
         ]:
             action = Gio.SimpleAction.new(name, None)
             action.connect("activate", callback)
             self.add_action(action)
             app.set_accels_for_action(f"win.{name}", [accel])
+
+        # Find & Replace actions
+        find_action = Gio.SimpleAction.new("find", None)
+        find_action.connect("activate", self.on_find)
+        self.add_action(find_action)
+        app.set_accels_for_action("win.find", ["<Control>f"])
+
+        replace_action = Gio.SimpleAction.new("replace", None)
+        replace_action.connect("activate", self.on_replace)
+        self.add_action(replace_action)
+        app.set_accels_for_action("win.replace", ["<Control>h"])
+
+        replace_all_action = Gio.SimpleAction.new("replace-all", None)
+        replace_all_action.connect("activate", self.on_replace_all)
+        self.add_action(replace_all_action)
 
         # query Ollama for models at startup (async, no UI block)
         self._ai_ctrl.refresh_models()
@@ -275,6 +304,7 @@ class EditorWindow(Adw.ApplicationWindow):
         self.update_title()
         self.update_status()
         self._update_lang_label()
+        GLib.idle_add(self._update_find_btn_state)
 
     def _on_n_pages_changed(self, *args):
         self.tab_bar.set_visible(self.tab_view.get_n_pages() > 1)
@@ -402,6 +432,82 @@ class EditorWindow(Adw.ApplicationWindow):
         if self.view is not None:
             mode = Gtk.WrapMode.WORD if btn.get_active() else Gtk.WrapMode.NONE
             self.view.set_wrap_mode(mode)
+
+    def _setup_find_button(self):
+        """Add a Find & Replace button to the header bar."""
+        if not getattr(self, 'find_popover', None):
+            # find_popover may not be ready yet — return early
+            return
+
+        # Add find button to header bar if it doesn't already exist
+        if getattr(self, '_find_button_added', False):
+            return
+
+        if self.header_bar is None:
+            return
+
+        self.find_btn = Gtk.Button.new_from_icon_name("edit-find-symbolic")
+        self.find_btn.set_tooltip_text("Find & Replace (Ctrl+F)")
+        self.find_btn.set_sensitive(bool(self.buffer))  # disabled if no buffer
+        self.find_btn.connect("clicked", lambda *_: GLib.idle_add(self.on_find))
+        self.header_bar.pack_end(self.find_btn)
+        self._find_button_added = True
+
+        # Also update header bar when sidebar visibility changes (to maintain pack order)
+        # The find button should always be between the AI menu and the close button
+
+        # Handle no-buffer state — if all tabs are closed, disable find button
+        self._update_find_btn_state()
+
+    def on_find(self, *_):
+        """Show/hide the find & replace popover."""
+        if not hasattr(self, 'find_popover') or not self.find_popover:
+            return
+        if not self.buffer:
+            self._show_toast("Open a file first to search", "info")
+            return
+
+        # Show the popover
+        GLib.idle_add(self.find_popover.popup)
+
+        # If we have a find entry, focus it; otherwise just show the popover
+        if hasattr(self, 'find_entry') and self.find_entry:
+            GLib.idle_add(self.find_entry.grab_focus)
+
+        # If there's a selection in the buffer, put its text into find_entry
+        if hasattr(self.buffer, 'get_selection_bounds'):
+            selection = self.buffer.get_selection_bounds()
+            if len(selection) == 2:  # non-empty selection returns two marks
+                start, end = selection
+                if not start.equal(end):
+                    sel_text = self.buffer.get_text(start, end, True)
+                    if sel_text.strip():  # non-whitespace selection
+                        self.find_entry.set_text(sel_text)
+
+    def on_replace(self, *_):
+        """Replace the current match (shortcut for Replace)."""
+        if not hasattr(self, 'find_replace') or not self.find_replace:
+            return
+        GLib.idle_add(self.find_replace._replace_current)
+
+    def on_replace_all(self, *_):
+        """Replace all occurrences (shortcut for Replace All)."""
+        if not hasattr(self, 'find_replace') or not self.find_replace:
+            return
+        GLib.idle_add(self.find_replace._replace_all)
+
+    def _update_find_btn_state(self):
+        """Enable/disable the find button based on whether a buffer is available."""
+        if hasattr(self, 'find_btn') and self.find_btn:
+            self.find_btn.set_sensitive(bool(self.buffer))
+
+    def _show_toast(self, message, description="", priority="normal"):
+        """Add a toast to the window's adw.toast_overlay."""
+        if not getattr(self, 'toast_overlay', None):
+            return
+        toast = Adw.Toast(title=message)
+        toast.set_timeout(3)
+        self.toast_overlay.add_toast(toast)
 
     # --- syntax highlight + theme ---
     def _detect_language(self, path, text=""):
