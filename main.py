@@ -595,7 +595,7 @@ class EditorWindow(Adw.ApplicationWindow):
 
 class MyApp(Adw.Application):
     def __init__(self):
-        super().__init__(application_id="pl.septicwolf818.TextEditor")
+        super().__init__(application_id="pl.septicwolf818.tavessari")
 
     def do_activate(self):
         win = self.props.active_window or EditorWindow(self)
