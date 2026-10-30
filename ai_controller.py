@@ -83,7 +83,7 @@ class AICtrl:
 
         tone_btn = Gtk.Button(label="Rewrite")
         tone_btn.set_tooltip_text("Rewrite selection in the selected tone")
-        tone_btn.connect("clicked", lambda *_: self.on_tone_go())
+        tone_btn.connect("clicked", self._on_tone_go)
         tone_btn.set_sensitive(False)
         tr.append(tone_btn)
         win.ai_action_buttons.append(tone_btn)
