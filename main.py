@@ -1,24 +1,21 @@
 import os
-import threading
 
 import gi  # type: ignore
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
-gi.require_version('Pango', '1.0')
 try:
     gi.require_version('GtkSource', '5')
     from gi.repository import GtkSource  # type: ignore
     HAS_GTKSOURCE = True
 except (ImportError, ValueError):
     HAS_GTKSOURCE = False
-from gi.repository import Gtk, Adw, Gio, GLib, Pango  # type: ignore
+from gi.repository import Gtk, Adw, Gio, GLib  # type: ignore
 
 from ollama import OllamaClient
-from ui_utils import _new_dialog, _show_dialog, TONES
+from ui_utils import _new_dialog, _show_dialog, _set_accessible_label
 from editor_tab import EditorTab
 from ai_controller import AICtrl
 from sidebar import FileBrowser
-from state_manager import StateManager
 from file_ops import FileOps
 from find_replace import FindReplace
 
@@ -26,15 +23,12 @@ from find_replace import FindReplace
 class EditorWindow(Adw.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app)
-        self.set_title("Text Editor")
+        self.set_title("TAVESSARI")
         self.set_default_size(1000, 650)
         self.ollama = OllamaClient()
-        self._ai_busy = False
-        self.folder_root = None
 
         # --- state ---
         self._temp_tabs = set()  # kept for sidebar.py compatibility
-        self.state = None  # StateManager for the current tab
         self.file_ops = FileOps(self)  # delegation object for file I/O
 
         # --- layout ---
@@ -44,7 +38,7 @@ class EditorWindow(Adw.ApplicationWindow):
         if not getattr(self, 'toast_overlay', None):
             overlay = Adw.ToastOverlay()
             overlay.set_child(vbox)
-            self.set_child(overlay)
+            self.set_content(overlay)
             self.toast_overlay = overlay
 
 
@@ -53,31 +47,43 @@ class EditorWindow(Adw.ApplicationWindow):
 
         new_btn = Gtk.Button.new_from_icon_name("document-new-symbolic")
         new_btn.set_tooltip_text("New file (Ctrl+N)")
+        _set_accessible_label(new_btn, "New file")
         new_btn.connect("clicked", self.file_ops.on_new)
         self.header_bar.pack_start(new_btn)
 
         open_btn = Gtk.Button.new_from_icon_name("document-open-symbolic")
         open_btn.set_tooltip_text("Open file (Ctrl+O)")
+        _set_accessible_label(open_btn, "Open file")
         open_btn.connect("clicked", self.file_ops.on_open)
         self.header_bar.pack_start(open_btn)
 
         save_btn = Gtk.Button.new_from_icon_name("document-save-symbolic")
         save_btn.set_tooltip_text("Save (Ctrl+S)")
+        _set_accessible_label(save_btn, "Save file")
         save_btn.connect("clicked", self.file_ops.on_save)
         self.header_bar.pack_start(save_btn)
 
         save_as_btn = Gtk.Button.new_from_icon_name("document-save-as-symbolic")
         save_as_btn.set_tooltip_text("Save As (Ctrl+Shift+S)")
+        _set_accessible_label(save_as_btn, "Save file as")
         save_as_btn.connect("clicked", self.file_ops.on_save_as)
         self.header_bar.pack_start(save_as_btn)
 
         folder_btn = Gtk.Button.new_from_icon_name("folder-open-symbolic")
         folder_btn.set_tooltip_text("Open folder (Ctrl+Shift+O)")
+        _set_accessible_label(folder_btn, "Open folder")
         folder_btn.connect("clicked", lambda *_: self.file_browse.open_folder())
         self.header_bar.pack_start(folder_btn)
 
-        self.side_toggle = Gtk.ToggleButton(icon_name="view-paged-symbolic")
+        self.side_toggle = Gtk.ToggleButton()
+        img_side = Gtk.Image.new_from_icon_name("view-paged-symbolic")
+        lbl_side = Gtk.Label(label="Sidebar")
+        side_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        side_box.append(img_side)
+        side_box.append(lbl_side)
+        self.side_toggle.set_child(side_box)
         self.side_toggle.set_tooltip_text("Show/hide file browser")
+        _set_accessible_label(self.side_toggle, "Show or hide file browser")
         self.side_toggle.set_active(True)
         self.side_toggle.connect("toggled", lambda *args: self.file_browse.on_side_toggle(*args))
         self.side_toggle.set_visible(False)
@@ -128,6 +134,7 @@ class EditorWindow(Adw.ApplicationWindow):
         self.tab_bar.set_view(self.tab_view)
         tab_plus = Gtk.Button.new_from_icon_name("list-add-symbolic")
         tab_plus.set_tooltip_text("New file (Ctrl+N)")
+        _set_accessible_label(tab_plus, "New tab")
         tab_plus.connect("clicked", self.file_ops.on_new)
         self.tab_bar.set_end_action_widget(tab_plus)
         self.editor_box.append(self.tab_bar)
@@ -164,10 +171,15 @@ class EditorWindow(Adw.ApplicationWindow):
         self._new_tab()
 
         # --- Find & Replace -------------------------------------------
-        self.find_replace = FindReplace(self)
+        self.find_btn = Gtk.Button.new_from_icon_name("edit-find-symbolic")
+        self.find_btn.set_tooltip_text("Find & Replace (Ctrl+F)")
+        _set_accessible_label(self.find_btn, "Find and replace")
+        self.find_btn.set_sensitive(False)
+        self.header_bar.pack_end(self.find_btn)
 
-        # Find button on the header bar (after find_replace so popover exists).
-        self._setup_find_button()
+        self.find_replace = FindReplace(self)
+        self.find_popover.set_parent(self.find_btn)
+        self.find_btn.connect("clicked", lambda *_: self.find_replace.open())
 
         self.update_title()
         self.update_status()
@@ -189,23 +201,22 @@ class EditorWindow(Adw.ApplicationWindow):
             self.add_action(action)
             app.set_accels_for_action(f"win.{name}", [accel])
 
-        # Find & Replace actions
+        # Find action
         find_action = Gio.SimpleAction.new("find", None)
         find_action.connect("activate", self.on_find)
         self.add_action(find_action)
         app.set_accels_for_action("win.find", ["<Control>f"])
 
-        replace_action = Gio.SimpleAction.new("replace", None)
-        replace_action.connect("activate", self.on_replace)
-        self.add_action(replace_action)
-        app.set_accels_for_action("win.replace", ["<Control>h"])
-
-        replace_all_action = Gio.SimpleAction.new("replace-all", None)
-        replace_all_action.connect("activate", self.on_replace_all)
-        self.add_action(replace_all_action)
-
         # query Ollama for models at startup (async, no UI block)
         self._ai_ctrl.refresh_models()
+
+        # Focus the editor on startup
+        GLib.idle_add(self._focus_editor)
+
+    def _focus_editor(self):
+        if self.view is not None:
+            self.view.grab_focus()
+        return False
 
     # --- active tab helpers (single-tab API over the tab view) ---
     def _active_tab(self):
@@ -230,11 +241,6 @@ class EditorWindow(Adw.ApplicationWindow):
         tab = self._active_tab()
         return tab.view if tab else None
 
-    @property
-    def current_path(self):
-        tab = self._active_tab()
-        return tab.file_path if tab else None
-
     # --- tabs ---
     def _new_tab(self, path=None, text=""):
         tab = EditorTab(
@@ -243,9 +249,6 @@ class EditorWindow(Adw.ApplicationWindow):
             word_wrap=self.wrap_toggle.get_active(),
         )
         tab._loading = True
-
-        # Create per-tab state manager for this tab
-        self.state = StateManager(tab)
 
         if HAS_GTKSOURCE:
             if path:
@@ -314,7 +317,7 @@ class EditorWindow(Adw.ApplicationWindow):
     def _on_close_page(self, _view, page):
         tab = page.get_child()
         if tab.buffer.get_modified() and not tab.close_confirmed:
-            self._confirm_discard_tab(page)
+            GLib.idle_add(self._confirm_discard_tab, page)
             return True
         return False
 
@@ -363,54 +366,38 @@ class EditorWindow(Adw.ApplicationWindow):
             self.update_title()
 
     # --- sidebar: show/hide layout ---
-    def _show_sidebar(self):
-        ep = self.editor_box.get_parent()
-        if ep is not None:
-            if type(ep).__name__ == "Paned":
-                ep.set_start_child(None)
-                ep.set_end_child(None)
+    def _set_main_layout(self, show_sidebar):
+        for widget in (self.editor_box, self.side_box):
+            parent = widget.get_parent()
+            if parent is None:
+                continue
+            if isinstance(parent, Gtk.Paned):
+                if parent.get_start_child() is widget:
+                    parent.set_start_child(None)
+                if parent.get_end_child() is widget:
+                    parent.set_end_child(None)
             else:
-                ep.remove(self.editor_box)
-        sp = self.side_box.get_parent()
-        if sp is not None:
-            if type(sp).__name__ == "Paned":
-                sp.set_start_child(None)
-                sp.set_end_child(None)
-            else:
-                sp.remove(self.side_box)
+                parent.remove(widget)
         child = self.main_box.get_first_child()
         while child is not None:
             nxt = child.get_next_sibling()
             self.main_box.remove(child)
             child = nxt
-        paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
-        paned.set_wide_handle(True)
-        paned.set_start_child(self.side_box)
-        paned.set_end_child(self.editor_box)
-        paned.set_position(250)
-        self.main_box.append(paned)
+        if show_sidebar:
+            paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
+            paned.set_wide_handle(True)
+            paned.set_start_child(self.side_box)
+            paned.set_end_child(self.editor_box)
+            paned.set_position(250)
+            self.main_box.append(paned)
+        else:
+            self.main_box.append(self.editor_box)
+
+    def _show_sidebar(self):
+        self._set_main_layout(True)
 
     def _show_editor_only(self):
-        ep = self.editor_box.get_parent()
-        if ep is not None:
-            if type(ep).__name__ == "Paned":
-                ep.set_start_child(None)
-                ep.set_end_child(None)
-            else:
-                ep.remove(self.editor_box)
-        sp = self.side_box.get_parent()
-        if sp is not None:
-            if type(sp).__name__ == "Paned":
-                sp.set_start_child(None)
-                sp.set_end_child(None)
-            else:
-                sp.remove(self.side_box)
-        child = self.main_box.get_first_child()
-        while child is not None:
-            nth = child.get_next_sibling()
-            self.main_box.remove(child)
-            child = nth
-        self.main_box.append(self.editor_box)
+        self._set_main_layout(False)
 
     def _make_tab_permanent(self, tab):
         """Promote a temp tab to permanent on edit or double-click."""
@@ -421,6 +408,7 @@ class EditorWindow(Adw.ApplicationWindow):
         page = self._find_page(tab)
         if page is not None:
             page.set_title(os.path.basename(tab.file_path) or "Untitled")
+            page.set_tooltip(tab.file_path or "Untitled")
             page.set_needs_attention(False)
 
     # --- view options ---
@@ -433,81 +421,17 @@ class EditorWindow(Adw.ApplicationWindow):
             mode = Gtk.WrapMode.WORD if btn.get_active() else Gtk.WrapMode.NONE
             self.view.set_wrap_mode(mode)
 
-    def _setup_find_button(self):
-        """Add a Find & Replace button to the header bar."""
-        if not getattr(self, 'find_popover', None):
-            # find_popover may not be ready yet — return early
-            return
-
-        # Add find button to header bar if it doesn't already exist
-        if getattr(self, '_find_button_added', False):
-            return
-
-        if self.header_bar is None:
-            return
-
-        self.find_btn = Gtk.Button.new_from_icon_name("edit-find-symbolic")
-        self.find_btn.set_tooltip_text("Find & Replace (Ctrl+F)")
-        self.find_btn.set_sensitive(bool(self.buffer))  # disabled if no buffer
-        self.find_btn.connect("clicked", lambda *_: GLib.idle_add(self.on_find))
-        self.header_bar.pack_end(self.find_btn)
-        self._find_button_added = True
-
-        # Also update header bar when sidebar visibility changes (to maintain pack order)
-        # The find button should always be between the AI menu and the close button
-
-        # Handle no-buffer state — if all tabs are closed, disable find button
-        self._update_find_btn_state()
-
     def on_find(self, *_):
-        """Show/hide the find & replace popover."""
-        if not hasattr(self, 'find_popover') or not self.find_popover:
+        if self.buffer is None:
             return
-        if not self.buffer:
-            self._show_toast("Open a file first to search", "info")
-            return
-
-        # Show the popover
-        GLib.idle_add(self.find_popover.popup)
-
-        # If we have a find entry, focus it; otherwise just show the popover
-        if hasattr(self, 'find_entry') and self.find_entry:
-            GLib.idle_add(self.find_entry.grab_focus)
-
-        # If there's a selection in the buffer, put its text into find_entry
-        if hasattr(self.buffer, 'get_selection_bounds'):
-            selection = self.buffer.get_selection_bounds()
-            if len(selection) == 2:  # non-empty selection returns two marks
-                start, end = selection
-                if not start.equal(end):
-                    sel_text = self.buffer.get_text(start, end, True)
-                    if sel_text.strip():  # non-whitespace selection
-                        self.find_entry.set_text(sel_text)
-
-    def on_replace(self, *_):
-        """Replace the current match (shortcut for Replace)."""
-        if not hasattr(self, 'find_replace') or not self.find_replace:
-            return
-        GLib.idle_add(self.find_replace._replace_current)
-
-    def on_replace_all(self, *_):
-        """Replace all occurrences (shortcut for Replace All)."""
-        if not hasattr(self, 'find_replace') or not self.find_replace:
-            return
-        GLib.idle_add(self.find_replace._replace_all)
+        if self.find_replace.is_open:
+            self.find_replace.close()
+        else:
+            self.find_replace.open()
 
     def _update_find_btn_state(self):
-        """Enable/disable the find button based on whether a buffer is available."""
         if hasattr(self, 'find_btn') and self.find_btn:
             self.find_btn.set_sensitive(bool(self.buffer))
-
-    def _show_toast(self, message, description="", priority="normal"):
-        """Add a toast to the window's adw.toast_overlay."""
-        if not getattr(self, 'toast_overlay', None):
-            return
-        toast = Adw.Toast(title=message)
-        toast.set_timeout(3)
-        self.toast_overlay.add_toast(toast)
 
     # --- syntax highlight + theme ---
     def _detect_language(self, path, text=""):
@@ -554,9 +478,6 @@ class EditorWindow(Adw.ApplicationWindow):
         self._update_source_style()
 
     # --- status / title ---
-    def on_mark_set(self, *args):
-        self.update_status()
-
     def update_status(self, *args):
         buf = self.buffer
         if buf is None:
@@ -575,14 +496,14 @@ class EditorWindow(Adw.ApplicationWindow):
     def update_title(self, *args):
         tab = self._active_tab()
         if tab is None:
-            self.set_title("Text Editor")
+            self.set_title("TAVESSARI")
             return
         self._refresh_tab_title(tab)
         name = os.path.basename(tab.file_path) if tab.file_path else "Untitled"
         if tab in self._temp_tabs:
             name = f"~ {name}"
         dirty = " •" if tab.buffer.get_modified() else ""
-        self.set_title(f"{name}{dirty} - Text Editor")
+        self.set_title(f"{name}{dirty} - TAVESSARI")
 
     # --- helpers ---
     def _error(self, msg):
@@ -607,7 +528,7 @@ class EditorWindow(Adw.ApplicationWindow):
         def _on_response(r):
             if r == "discard":
                 tab.close_confirmed = True
-                self.tab_view.close_page(page)
+                self.tab_view.close_page_finish(page, True)
 
         _show_dialog(d, self, _on_response)
 
@@ -634,7 +555,7 @@ class EditorWindow(Adw.ApplicationWindow):
         d = _new_dialog(
             self,
             "Unsaved changes",
-            f'"{name}" has unsaved changes. Discard them?',
+            f'"{name}" has unsaved changes. Save before closing?',
         )
         d.add_response("cancel", "Cancel")
         d.add_response("discard", "Discard")
@@ -650,16 +571,26 @@ class EditorWindow(Adw.ApplicationWindow):
                 self.tab_view.close_page(page)
                 self._confirm_next_dirty_page()
             elif r == "save":
-                if hasattr(tab, 'file_path') and tab.file_path:
-                    self.file_ops._write_to(tab.file_path, tab)
-                    if not tab.buffer.get_modified():
-                        tab.close_confirmed = True
-                        self.tab_view.close_page(page)
-                self._confirm_next_dirty_page()
+                if tab.file_path:
+                    saved = self.file_ops._write_to(tab.file_path, tab)
+                    self._finish_close_after_save(page, tab, saved)
+                else:
+                    self.file_ops.save_as_tab(
+                        tab,
+                        lambda saved: self._finish_close_after_save(
+                            page, tab, saved))
             else:
                 self._close_queue.clear()
 
         _show_dialog(d, self, _on_response)
+
+    def _finish_close_after_save(self, page, tab, saved):
+        if not saved:
+            self._close_queue.clear()
+            return
+        tab.close_confirmed = True
+        self.tab_view.close_page(page)
+        self._confirm_next_dirty_page()
 
 
 class MyApp(Adw.Application):

@@ -8,7 +8,7 @@ except (ImportError, ValueError):
     HAS_GTKSOURCE = False
     GtkSource = None # type: ignore
 
-from gi.repository import Gtk, GLib # type: ignore
+from gi.repository import Gtk # type: ignore
 
 class EditorTab(Gtk.Box):
     """One tab page: scrolled source view + its file state."""

@@ -38,7 +38,7 @@ class OllamaClient:
         result_parts: list[str] = []
         start_time = time.time()
         
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=120) as resp:
             for line in resp:
                 if (time.time() - start_time) > timeout:
                     raise InterruptedError("Timed out")

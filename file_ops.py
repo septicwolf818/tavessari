@@ -1,7 +1,5 @@
 """File I/O operations for the text editor (tab-based)."""
 
-import os
-
 from gi.repository import Gtk, GLib, Gio  # type: ignore
 
 
@@ -15,7 +13,7 @@ class FileOps:
     # New file
     # ------------------------------------------------------------------
 
-    def on_new(self):
+    def on_new(self, *args):
         self.win._new_tab()
         if self.win.view is not None:
             self.win.view.grab_focus()
@@ -24,7 +22,7 @@ class FileOps:
     # Open file (dialog-driven)
     # ------------------------------------------------------------------
 
-    def on_open(self):
+    def on_open(self, *args):
         dlg = Gtk.FileDialog(title="Open file")
         dlg.open(self.win, None, self._on_open_done)
 
@@ -41,7 +39,7 @@ class FileOps:
     # Save file (current-path or dialog-driven)
     # ------------------------------------------------------------------
 
-    def on_save(self):
+    def on_save(self, *args):
         tab = self.win._active_tab()
         if tab is None:
             return
@@ -50,24 +48,33 @@ class FileOps:
         else:
             self.on_save_as()
 
-    def on_save_as(self):
+    def on_save_as(self, *args):
         tab = self.win._active_tab()
         if tab is None:
             return
+        self.save_as_tab(tab)
+
+    def save_as_tab(self, tab, on_complete=None):
+        """Save a specific tab, optionally reporting whether it was saved."""
         dlg = Gtk.FileDialog(title="Save file")
         if tab.file_path:
             dlg.set_initial_file(Gio.File.new_for_path(tab.file_path))
-        dlg.save(self.win, None, self._on_save_done)
+        dlg.save(
+            self.win, None,
+            lambda dialog, result: self._on_save_done(
+                dialog, result, tab, on_complete))
 
-    def _on_save_done(self, dlg, result):
+    def _on_save_done(self, dlg, result, tab, on_complete=None):
         try:
             f = dlg.save_finish(result)
         except GLib.Error:
+            if on_complete is not None:
+                on_complete(False)
             return
         path = f.get_path()
-        tab = self.win._active_tab()
-        if path and tab is not None:
-            self._write_to(path, tab)
+        saved = bool(path and self._write_to(path, tab))
+        if on_complete is not None:
+            on_complete(saved)
 
     # ------------------------------------------------------------------
     # Internal write helper
@@ -81,7 +88,7 @@ class FileOps:
                 fh.write(text)
         except OSError as e:
             self.win._error(f"Could not save file:\n{e}")
-            return
+            return False
         tab.file_path = path
         tab.close_confirmed = False
         tab.buffer.set_modified(False)
@@ -93,3 +100,4 @@ class FileOps:
         self.win._update_lang_label()
         self.win.update_title()
         self.win.update_status()
+        return True

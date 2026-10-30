@@ -43,7 +43,7 @@ install: build
 	@rm -rf "$(PREFIX)/$(APP_NAME)"
 	@mkdir -p "$(PREFIX)/$(APP_NAME)"
 	@cp "$(APP_MAIN)" "$(PREFIX)/$(APP_NAME)/"
-	@for f in ai_controller.py editor_tab.py file_ops.py ollama.py sidebar.py state_manager.py ui_utils.py; do cp "$$f" "$(PREFIX)/$(APP_NAME)/"; done
+	@for f in ai_controller.py editor_tab.py file_ops.py find_replace.py ollama.py sidebar.py ui_utils.py; do cp "$$f" "$(PREFIX)/$(APP_NAME)/"; done
 	@python3 -m venv "$(PREFIX)/$(APP_NAME)/.venv"
 	@"$(PREFIX)/$(APP_NAME)/.venv/bin/python" -m pip install --upgrade pip
 	@"$(PREFIX)/$(APP_NAME)/.venv/bin/pip" install -r requirements.txt

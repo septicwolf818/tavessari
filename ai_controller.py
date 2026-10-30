@@ -1,10 +1,10 @@
 import gi  # type: ignore
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Gtk, Adw, Gio, GLib, Pango  # type: ignore
+from gi.repository import Gtk, Adw, GLib  # type: ignore
 
 import threading
-from ui_utils import _new_dialog, _show_dialog, TONES
+from ui_utils import _new_dialog, _show_dialog, _set_accessible_label, TONES
 
 
 class AICtrl:
@@ -20,9 +20,10 @@ class AICtrl:
         popup = Gtk.Popover()
         if getattr(win, "ai_popover_exposed", False):
             return
+        win.ai_popover = popup
         win.ai_button = Gtk.MenuButton(label="✨ AI")
-        win.ai_button.set_tooltip_text("Connecting to Ollamaâ€¦")
-        win.ai_button.set_sensitive(False)
+        win.ai_button.set_tooltip_text("Connecting to Ollama...")
+        win.ai_button.set_sensitive(True)
         header.pack_end(win.ai_button)
         win.ai_button.set_popover(popup)
         win._ai_pending = None
@@ -45,6 +46,7 @@ class AICtrl:
 
         ref_btn = Gtk.Button.new_from_icon_name("view-refresh-symbolic")
         ref_btn.set_tooltip_text("Refresh models")
+        _set_accessible_label(ref_btn, "Refresh AI models")
         ref_btn.connect("clicked", lambda *_: self.refresh_models())
         mr.append(ref_btn)
 
@@ -74,10 +76,10 @@ class AICtrl:
         box.append(tr)
         tr.append(Gtk.Label(label="Tone:"))
         win.tone_store = Gtk.StringList.new(TONES)
-        twd = Gtk.DropDown(model=win.tone_store)
-        twd.set_hexpand(True)
-        twd.set_tooltip_text("Pick a tone, then Rewrite")
-        tr.append(twd)
+        win.tone_dropdown = Gtk.DropDown(model=win.tone_store)
+        win.tone_dropdown.set_hexpand(True)
+        win.tone_dropdown.set_tooltip_text("Pick a tone, then Rewrite")
+        tr.append(win.tone_dropdown)
 
         tone_btn = Gtk.Button(label="Rewrite")
         tone_btn.set_tooltip_text("Rewrite selection in the selected tone")
@@ -111,7 +113,8 @@ class AICtrl:
     # --- model fetch -------------------------------------------------------------
     def refresh_models(self):
         win = self.win
-        win.ai_button.set_tooltip_text("Connecting to Ollamaâ€¦")
+        win.ai_button.set_tooltip_text("Connecting to Ollama...")
+        win.ai_hint.set_text("Connecting to Ollama...")
         t = threading.Thread(target=self._fetch_models_worker, daemon=True)
         t.start()
 
@@ -128,18 +131,22 @@ class AICtrl:
         win.model_store.splice(0, len(win.model_store), models)  # type: ignore
         if models:
             win.model_dropdown.set_selected(0)
-            win.ai_button.set_sensitive(True)
             win.ai_button.set_tooltip_text("AI actions (Ollama)")
+            win.ai_hint.set_text("Select text in the editor to enable AI actions.")
         else:
-            win.ai_button.set_sensitive(False)
             win.ai_button.set_tooltip_text("No models found.")
+            win.ai_hint.set_text("No Ollama models found. Use Refresh to try again.")
+        # Keep the menu reachable even with no models so Refresh remains available.
+        win.ai_button.set_sensitive(True)
         self._update_ai_sensitivity()
         return False
 
     def _on_models_failed(self, err):
         win = self.win
-        win.ai_button.set_sensitive(False)
         win.ai_button.set_tooltip_text("Ollama is unavailable")
+        win.ai_hint.set_text("Ollama is unavailable. Check the connection and refresh models.")
+        # Keep the menu reachable even when the initial model request fails.
+        win.ai_button.set_sensitive(True)
         self._update_ai_sensitivity()
         return False
 
@@ -152,7 +159,7 @@ class AICtrl:
             win.buffer is not None  # type: ignore
             and win.buffer.get_has_selection()
             and not getattr(self, "_busy", False)
-            and win.ai_button.get_sensitive())  # type: ignore
+            and self.selected_model() is not None)
         for b in win.ai_action_buttons:  # type: ignore
             b.set_sensitive(enabled)
         if hasattr(win, "tone_dropdown"):
@@ -174,7 +181,7 @@ class AICtrl:
         return self.win.model_store.get_string(idx)
 
     def _on_tone_go(self, btn=None):
-        dd = self.win.tone_dropdown  # type: ignore
+        dd = self.win.tone_dropdown
         idx = dd.get_selected()
         tone = (
             self.win.tone_store.get_string(idx)  # type: ignore

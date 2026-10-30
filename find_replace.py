@@ -1,498 +1,377 @@
-"""Find & Replace popover for the GTK4/GtkSourceView5 text editor."""
+"""Find & Replace popover for the GTK4 text editor."""
 
-from gi.repository import Gtk, GLib, Adw  # type: ignore
+from gi.repository import Gtk, GLib, Adw, Gdk  # type: ignore
 
 
 class FindReplace:
-    """A Find & Replace toolbar embedded in a Gtk.Popover.
-
-    Created with ``FindReplace(editor_window)`` where *editor_window*
-    is an instance of ``EditorWindow`` (main.py).  The constructor builds
-    the popover UI and registers it as attributes on the window so that
-    main.py can reference them directly.
-    """
+    """Simple Find & Replace toolbar in a Gtk.Popover."""
 
     def __init__(self, win):
-        """Build the find/replace popover and attach to *win*.
-
-        Parameters
-        ----------
-        win : EditorWindow
-            The application window that owns this find-and-replace UI.
-            ``find_popover``, ``find_entry``, and ``replace_entry`` will be
-            stored as attributes on it.
-        """
         self.win = win
-        self.find_popover = Gtk.Popover()
 
-        # Build the popover content ---------------------------------------
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, margin=12, spacing=6)
-        self.find_popover.set_child(box)
+        popover = Gtk.Popover()
+        popover.set_has_arrow(False)
+        popover.add_css_class("toolbar")
 
-        # ---- Find row ---------------------------------------------------
-        find_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        find_lbl = Gtk(label="Find:", width_chars=5, halign=Gtk.Align.START)
-        self.find_entry = Gtk.Entry(margin_bottom=0, hexpand=True)
-        self.find_entry.set_placeholder_text("Search...")
-        self.find_entry.connect("changed", self._on_find_changed)
-        find_box.append(find_lbl)
-        find_box.append(self.find_entry)
-        box.append(find_box)
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        vbox.set_margin_start(10)
+        vbox.set_margin_end(10)
+        vbox.set_margin_top(8)
+        vbox.set_margin_bottom(8)
+        popover.set_child(vbox)
 
-        # ---- Replace row (initially hidden) -----------------------------
-        rep_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        rep_lbl = Gtk(label="Replace:", width_chars=5, halign=Gtk.Align.START)
-        self.replace_entry = Gtk.Entry(margin_bottom=0, hexpand=True)
-        self.replace_entry.set_placeholder_text("Replace with")
-        # "activate" fires when the user presses Enter inside the entry.
+        # --- Find row ---
+        find_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.find_entry = Gtk.Entry(hexpand=True)
+        self.find_entry.set_placeholder_text("Find...")
+        self.find_entry.set_size_request(250, -1)
+        self.find_entry.connect("activate", self._find_next)
+        find_row.append(self.find_entry)
+        vbox.append(find_row)
+
+        # --- Replace row (always in layout, just hidden) ---
+        self.replace_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.replace_entry = Gtk.Entry(hexpand=True)
+        self.replace_entry.set_placeholder_text("Replace with...")
+        self.replace_entry.set_size_request(250, -1)
         self.replace_entry.connect("activate", self._replace_current)
-        rep_box.append(rep_lbl)
-        rep_box.append(self.replace_entry)
-        box.append(rep_box)
-        self._replace_row = rep_box          # keep handle for hide/show
+        self.replace_row.append(self.replace_entry)
+        self.replace_row.set_visible(False)
+        vbox.append(self.replace_row)
 
-        # ---- Options row ------------------------------------------------
-        opts_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        # --- Options row ---
+        opts = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
 
-        self.case_checkbox = Gtk.CheckButton(icon_name="case-sensitive-symbolic")
-        self.case_checkbox.set_tooltip_text("Case-sensitive search")
-        opts_box.append(self.case_checkbox)
+        self.case_checkbox = Gtk.CheckButton(label="Match case")
+        opts.append(self.case_checkbox)
 
-        self.ww_checkbox = Gtk.CheckButton(icon_name="whole-word-symbolic")
-        self.ww_checkbox.set_tooltip_text("Whole word only")
-        opts_box.append(self.ww_checkbox)
+        self.ww_checkbox = Gtk.CheckButton(label="Whole word")
+        opts.append(self.ww_checkbox)
 
-        # Direction dropdown (Gtk.ComboBoxText — simple string list)
-        dir_model = Gtk.StringList.new(["Next", "Previous"])
-        self.dir_combo = Gtk.ComboBox.new_with_model(dir_model)
-        self.dir_combo.set_active(0)       # default: Next
-        self.dir_combo.set_tooltip_text("Search direction")
-        opts_box.append(self.dir_combo)
+        self.dir_combo = Gtk.ComboBoxText.new()
+        self.dir_combo.append_text("Forward")
+        self.dir_combo.append_text("Backward")
+        self.dir_combo.set_active(0)
+        opts.append(self.dir_combo)
 
-        box.append(opts_box)
+        vbox.append(opts)
 
-        # ---- Buttons row ------------------------------------------------
-        btns_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.match_count_label = Gtk.Label(label="")
+        self.match_count_label.set_xalign(0.0)
+        self.match_count_label.add_css_class("dim-label")
+        vbox.append(self.match_count_label)
 
-        self.find_next_btn = Gtk.Button(label="Find Next", hexpand=False)
+        # --- Buttons row ---
+        btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+
+        self.find_next_btn = Gtk.Button(label="Find Next")
         self.find_next_btn.set_sensitive(False)
         self.find_next_btn.add_css_class("suggested-action")
         self.find_next_btn.connect("clicked", self._find_next)
-        btns_box.append(self.find_next_btn)
+        btns.append(self.find_next_btn)
 
-        sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
-        sep.set_margin_start(4)
-        sep.set_margin_end(4)
-        btns_box.append(sep)
-
-        self.replace_btn = Gtk.Button(label="Replace", hexpand=False)
+        self.replace_btn = Gtk.Button(label="Replace")
         self.replace_btn.set_sensitive(False)
-        self.replace_btn.add_css_class("accent")
         self.replace_btn.connect("clicked", self._replace_current)
-        btns_box.append(self.replace_btn)
+        btns.append(self.replace_btn)
 
-        self.replace_all_btn = Gtk.Button(label="Replace All", hexpand=False)
+        self.replace_all_btn = Gtk.Button(label="Replace All")
         self.replace_all_btn.set_sensitive(False)
-        self.replace_all_btn.add_css_class("accent")
         self.replace_all_btn.connect("clicked", self._replace_all)
-        btns_box.append(self.replace_all_btn)
+        btns.append(self.replace_all_btn)
 
-        # Stretching spacer
-        btns_box.append(Gtk.Box(hexpand=True))
+        btns.append(Gtk.Box(hexpand=True))
 
-        # Close button
-        close_btn = Gtk.Button.new_from_icon_name("window-close-symbolic")
-        close_btn.set_tooltip_text("Close (Esc)")
-        close_btn.set_size_request(28, 28)
+        close_btn = Gtk.Button(label="Close")
         close_btn.connect("clicked", self._close_popover)
-        btns_box.append(close_btn)
+        btns.append(close_btn)
 
-        box.append(btns_box)
+        vbox.append(btns)
 
-        # ---- Popover positioning & show handler -------------------------
-        self.find_popover.set_parent(self.win)
-        # Position the popover near the header bar find button area.
-        self.find_popover.set_has_arrow(False)
-        self.find_popover.add_css_class("inline")
+        # --- Signals ---
+        self.find_entry.connect("changed", self._on_find_changed)
+        self.replace_entry.connect("changed", self._on_find_changed)
+        self.case_checkbox.connect("toggled", self._on_search_option_changed)
+        self.ww_checkbox.connect("toggled", self._on_search_option_changed)
+        popover.connect("closed", self._on_popover_closed)
+        popover.connect("show", lambda *_: setattr(self, '_is_open', True))
 
-        # When the popover becomes visible, auto-find the previous search term
-        # (so reopening with Ctrl+F re-highlights the last query).
-        self.find_popover.connect("show", self._on_popover_show)
+        # Handle Ctrl+F inside the popover to toggle it closed
+        key_ctrl = Gtk.EventControllerKey()
+        key_ctrl.connect("key-pressed", self._on_key_pressed)
+        popover.add_controller(key_ctrl)
 
-        # Expose attributes on win so main.py can reach them directly.
-        self.win.find_popover = self.find_popover
+        self._is_open = False
+
+        # Expose on win
+        self.find_popover = popover
+        self.win.find_popover = popover
         self.win.find_entry = self.find_entry
         self.win.replace_entry = self.replace_entry
-
-        # Store self-reference on the window for convenience from outside.
         self.win.find_replace = self
 
     # ------------------------------------------------------------------
-    # Public helpers (used by Gio actions in main.py)
+    # Public API
     # ------------------------------------------------------------------
 
-    def show(self):
-        """Show the find popover (convenience wrapper)."""
-        buf = self.win.buffer
-        if buf is None:
-            # No tab open — brief visual feedback that there's nothing to
-            # search.  Don't crash; just return silently so main.py can
-            # still wire up a disabled find button without error.
+    def open(self, select_all=False):
+        """Open the popover, optionally pre-filling with the buffer selection."""
+        if self.win.buffer is None:
             return
-        self.find_popover.pop_up()
 
-    def hide(self):
-        """Hide the find popover."""
-        if self.find_popover.get_visible():
-            self.find_popover.popdown()
+        # Pre-fill with selection
+        buf = self.win.buffer
+        if buf.get_has_selection():
+            start, end = buf.get_selection_bounds()
+            sel = buf.get_text(start, end, False)
+            if sel.strip():
+                self.find_entry.set_text(sel)
+                if select_all:
+                    self.find_entry.select_region(0, -1)
+
+        self.find_popover.popup()
+        self.find_entry.grab_focus()
+
+    def close(self):
+        self._is_open = False
+        self.find_popover.popdown()
+
+    @property
+    def is_open(self):
+        return self._is_open
 
     # ------------------------------------------------------------------
-    # Popover show / close helpers
+    # Internal
     # ------------------------------------------------------------------
 
     def _close_popover(self, *_):
-        """Close the popover and release focus."""
-        self.win.find_entry.set_text("")
-        self.win.find_entry.set_placeholder_text("Search...")
-        self.win.replace_entry.set_text("")
-        self._hide_replace_row()
         self.find_popover.popdown()
 
-    def _on_popover_show(self, *_):
-        """When shown, if there is previous search text, find it."""
-        text = self.win.find_entry.get_text()
-        if text:
-            GLib.idle_add(self._find_next)
+    def _on_key_pressed(self, _controller, keyval, _keycode, state):
+        if keyval == Gdk.KEY_f and state & Gdk.ModifierType.CONTROL_MASK:
+            self.close()
+            return True
+        return False
 
-    # ------------------------------------------------------------------
-    # Find logic
-    # ------------------------------------------------------------------
+    def _on_popover_closed(self, *_):
+        self._is_open = False
+        if self.win.view is not None:
+            # Use idle_add so focus moves after GTK finishes cleanup
+            GLib.idle_add(self._grab_editor_focus)
+
+    def _grab_editor_focus(self):
+        if self.win.view is not None:
+            self.win.view.grab_focus()
+        return False  # one-shot
 
     def _on_find_changed(self, entry):
-        """Handle changes to the Find entry.
-
-        Enables / disables buttons and toggles visibility of the Replace row.
-        """
-        text = entry.get_text()
+        text = self.find_entry.get_text()
         has_text = bool(text)
+        if entry is self.find_entry:
+            self.match_count_label.set_text("")
 
-        # Enable/disable Find Next button
         self.find_next_btn.set_sensitive(has_text)
 
-        # Show/hide replace row
-        if has_text:
-            self._show_replace_row()
-        else:
-            self._hide_replace_row()
-            self.replace_entry.set_text("")
+        # Show replace row only when there is find text
+        self.replace_row.set_visible(has_text)
 
-        # Enable/disable Replace buttons (need both Find and Replace text)
-        rep_text = self.win.replace_entry.get_text()
-        both = has_text and bool(rep_text)
-        self.replace_btn.set_sensitive(both)
-        self.replace_all_btn.set_sensitive(both)
+        # An empty replacement is valid: it deletes matching text.
+        self.replace_btn.set_sensitive(has_text)
+        self.replace_all_btn.set_sensitive(has_text)
 
-    def _show_replace_row(self):
-        """Make the replace row visible and map it to the popover."""
-        if not self._replace_row.get_visible():
-            # Insert between the find row (child 0) and options row (child 2)
-            box = self.find_popover.get_child()
-            box.set_child_nth(self._replace_row, 1)
-            self._replace_row.set_visible(True)
-
-    def _hide_replace_row(self):
-        """Make the replace row invisible."""
-        if self._replace_row.get_visible():
-            self._replace_row.set_visible(False)
+    def _on_search_option_changed(self, *_):
+        if self.find_entry.get_text():
+            self._update_match_count()
 
     # ------------------------------------------------------------------
-    # Search flags helper
+    # Search helpers
     # ------------------------------------------------------------------
 
     def _build_flags(self):
-        """Return a Gtk.TextSearchFlags value from checkbox state."""
         flags = 0
-        # CASE_INSENSITIVE when case-checkbox is NOT active (i.e. insensitive search).
         if not self.case_checkbox.get_active():
             flags |= Gtk.TextSearchFlags.CASE_INSENSITIVE
-        if self.ww_checkbox.get_active():
-            flags |= Gtk.TextSearchFlags.WHOLE_WORD
         return flags
 
-    # ------------------------------------------------------------------
-    # _find_next — core find operation
-    # ------------------------------------------------------------------
+    def _forward_search(self, cursor, text, flags):
+        whole_word = self.ww_checkbox.get_active()
+        search_from = cursor.copy()
+        while True:
+            result = search_from.forward_search(text, flags)
+            if result is None:
+                return None
+            start, end = result
+            if not whole_word or (start.starts_word() and end.ends_word()):
+                return result
+            search_from = start.copy()
+            if not search_from.forward_char():
+                return None
+
+    def _backward_search(self, cursor, text, flags):
+        whole_word = self.ww_checkbox.get_active()
+        search_from = cursor.copy()
+        while True:
+            result = search_from.backward_search(text, flags)
+            if result is None:
+                return None
+            start, end = result
+            if not whole_word or (start.starts_word() and end.ends_word()):
+                return result
+            search_from = start.copy()
+            if not search_from.backward_char():
+                return None
 
     def _find_next(self, *_):
-        """Search forward / backward for the current Find text and select it.
-
-        Also updates the match count in the status bar.
-        """
+        """Find the next match from cursor, wrapping around once if needed."""
         buf = self.win.buffer
         if buf is None:
-            return  # no tab open
-
-        text = self.win.find_entry.get_text()
+            return
+        text = self.find_entry.get_text()
         if not text:
             return
 
-        search_flags = self._build_flags()
+        flags = self._build_flags()
+        forward = self.dir_combo.get_active() == 0
 
-        # Determine iteration direction from the combo box.
-        active_dir = self.dir_combo.get_active()
-        next_iter = True if active_dir == 0 else False  # Next / Previous
+        # Adjust cursor to the correct edge when a match is already selected
+        if buf.get_has_selection():
+            sel_start, sel_end = buf.get_selection_bounds()
+            if forward:
+                buf.place_cursor(sel_end)
+            else:
+                buf.place_cursor(sel_start)
 
-        it = buf.get_iter_at_mark(buf.get_insert())
+        cursor = buf.get_iter_at_mark(buf.get_insert())
 
-        found = False
-        match_iter = None
+        # 1) Search from cursor in the chosen direction
+        result = (self._forward_search(cursor, text, flags) if forward
+                  else self._backward_search(cursor, text, flags))
 
-        if next_iter:
-            result = it.forward_search(text, search_flags, len(text) + 1)
-            if result:
-                found, match_iter = result
+        if result is not None:
+            self._highlight(buf, result[0], result[1], forward)
+            self._update_match_count()
+            return
+
+        # 2) Wrap around: search from the opposite end
+        if forward:
+            result = self._forward_search(buf.get_start_iter(), text, flags)
+            wrap_msg = "Wrapped to beginning"
         else:
-            # backward_search returns (True/False, iter); check for truthy first element.
-            result = it.backward_search(text, search_flags)
-            if result and result[0]:
-                found = True
-                match_iter = result[1]
+            result = self._backward_search(buf.get_end_iter(), text, flags)
+            wrap_msg = "Wrapped to end"
 
-        if found and match_iter is not None:
-            start_iter = match_iter.copy()
-            end_iter = match_iter.copy()
-            end_iter.forward_chars(len(text))
-
-            # Select the match by moving both marks.
-            buf.move_mark(buf.get_insert(), start_iter)
-            buf.move_mark(buf.get_selection_bound(), end_iter)
-            buf.place_cursor(start_iter)
-
-            # Scroll the view so the selection is visible.
-            self._scroll_to_selection(buf)
-
-            # Update status bar with match count.
-            match_count = self._count_matches(buf, text, search_flags)
-            self._update_status_match(match_count)
+        if result is not None:
+            self._highlight(buf, result[0], result[1], forward)
+            self._update_match_count()
+            toast = Adw.Toast(title=wrap_msg)
+            toast.set_timeout(1)
+            self.win.toast_overlay.add_toast(toast)
         else:
-            # Flash the find entry border red briefly.
+            self._update_match_count()
             self._flash_red()
-
-            # Show toast via Adw.Toast if available; fall back to a simple
-            # label message on the window status bar otherwise.
             toast = Adw.Toast(title="Not found")
             toast.set_timeout(2)
-            GLib.idle_add(self.win.toast_overlay.add_toast, toast)
+            self.win.toast_overlay.add_toast(toast)
 
-    # ------------------------------------------------------------------
-    # _count_matches — iterate through buffer and count occurrences
-    # ------------------------------------------------------------------
-
-    def _count_matches(self, buf, text, flags):
-        """Return the total number of matches for *text* in *buf*.
-
-        Iterates from start to end using successive ``forward_search`` calls.
-        """
-        it = buf.get_start_iter()
-        count = 0
-        max_iterations = buf.get_char_count() + 1  # safety cap
-
-        while True:
-            if not text:
-                break
-            result = it.forward_search(text, flags)
-            if not result or not result[0]:
-                break
-            count += 1
-            # Move past this match to find the next.
-            it = result[1].copy()
-            it.forward_chars(len(text))
-            max_iterations -= 1
-            if max_iterations <= 0:
-                break
-
-        return count
-
-    # ------------------------------------------------------------------
-    # Scroll helpers
-    # ------------------------------------------------------------------
-
-    def _scroll_to_selection(self, buf):
-        """Scroll the active view so that the selection rectangle is visible."""
-        # Use scroll_to_mark which works on both Gtk.TextBuffer and GtkSource.Buffer.
-        # Avoid get_cell_area which only exists on Gtk.TextView, not GtkTextBuffer.
-        mark = buf.get_insert()
-        if self.win.view is not None:
-            start_iter = buf.get_mark("selection_bound").get_iter() if buf.get_has_selection() else buf.get_iter_at_mark(mark)
-            buf.scroll_to_mark(mark, 0.25)
-
-    # ------------------------------------------------------------------
-    # _replace_current — replace the current match
-    # ------------------------------------------------------------------
+    def _highlight(self, buf, start, end, forward=True):
+        """Select a range in the buffer and scroll to it."""
+        if forward:
+            buf.select_range(end, start)
+        else:
+            buf.select_range(start, end)
+        self.win.view.scroll_to_iter(start, 0.25, True, 0.0, 0.0)
 
     def _replace_current(self, *_):
-        """Replace the currently selected text with the Replace entry value."""
         buf = self.win.buffer
         if buf is None:
             return
-
-        find_text = self.win.find_entry.get_text()
-        rep_text = self.win.replace_entry.get_text()
-        if not find_text or not rep_text:
+        find_text = self.find_entry.get_text()
+        rep_text = self.replace_entry.get_text()
+        if not find_text:
             return
 
-        # Check that there is an active selection matching the find text.
-        start_mark = buf.get_insert()
-        end_mark = buf.get_selection_bound()
-        selected_text = buf.get_text(start_mark.get_iter(), end_mark.get_iter(), False)
-
-        if selected_text == find_text:
-            # Delete the selection and insert replacement.
-            iter_before = start_mark.get_iter().copy()
-            buf.delete(start_mark.get_iter(), end_mark.get_iter())
-            buf.insert(iter_before, rep_text)
-
-            # Move cursor just after inserted text.
-            new_end = iter_before.copy()
-            new_end.forward_chars(len(rep_text))
-            buf.move_mark(buf.get_insert(), new_end)
-            buf.move_mark(buf.get_selection_bound(), new_end)
-
-            # Immediately find the next occurrence (if any).
-            GLib.idle_add(self._find_next_after_replace, buf, find_text)
-        else:
-            # Selection doesn't match — don't call _find_next here to avoid
-            # recursion; just flash red and return silently.
-            self._flash_red()
-
-    # ------------------------------------------------------------------
-    # _replace_all — replace every occurrence in the buffer
-    # ------------------------------------------------------------------
+        if buf.get_has_selection():
+            start, end = buf.get_selection_bounds()
+            match = self._forward_search(start, find_text, self._build_flags())
+            if (match is not None
+                    and match[0].get_offset() == start.get_offset()
+                    and match[1].get_offset() == end.get_offset()):
+                buf.begin_user_action()
+                try:
+                    buf.delete(start, end)
+                    buf.insert(start, rep_text)
+                finally:
+                    buf.end_user_action()
+                GLib.idle_add(self._find_next)
+                return
+        self._flash_red()
+        toast = Adw.Toast(title="Select a matching search result to replace")
+        toast.set_timeout(2)
+        self.win.toast_overlay.add_toast(toast)
 
     def _replace_all(self, *_):
-        """Replace all occurrences of Find text with Replace text."""
         buf = self.win.buffer
         if buf is None:
             return
-
-        find_text = self.win.find_entry.get_text()
-        rep_text = self.win.replace_entry.get_text()
-        if not find_text or not rep_text:
+        find_text = self.find_entry.get_text()
+        rep_text = self.replace_entry.get_text()
+        if not find_text:
             return
 
-        search_flags = self._build_flags()
-
-        # Get full text and find all matches using character offsets
-        full_text = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), True)
-        search_len = len(find_text)
-
-        if Gtk.TextSearchFlags.CASE_INSENSITIVE in search_flags:
-            search_lower = find_text.lower()
-            full_lower = full_text.lower()
-        else:
-            search_lower = find_text
-            full_lower = full_text
-
-        matches = []  # list of (start_offset, end_offset) character indices
-        pos = 0
-        max_chars = buf.get_char_count() + 1
-        while pos <= len(full_text) - search_len and max_chars > 0:
-            idx = full_lower.find(search_lower, pos)
-            if idx == -1:
-                break
-            actual_start = pos + (idx - pos)
-            matches.append((actual_start, actual_start + search_len))
-            pos = actual_start + 1
-            max_chars -= 1
+        flags = self._build_flags()
+        matches = self._find_matches(buf, find_text, flags)
 
         if not matches:
-            # Nothing to replace
             self._flash_red()
             toast = Adw.Toast(title="No matches found")
             toast.set_timeout(2)
-            GLib.idle_add(self.win.toast_overlay.add_toast, toast)
+            self.win.toast_overlay.add_toast(toast)
             return
 
-        buf.begin_revertable_change()
+        buf.begin_user_action()
+        try:
+            for start_off, end_off in reversed(matches):
+                s = buf.get_iter_at_offset(start_off)
+                e = buf.get_iter_at_offset(end_off)
+                buf.delete(s, e)
+                buf.insert(buf.get_iter_at_offset(start_off), rep_text)
+        finally:
+            buf.end_user_action()
 
-        for start_offset, end_offset in reversed(matches):
-            start_iter = buf.get_iter_at_offset(start_offset)
-            end_iter = buf.get_iter_at_offset(end_offset)
-            buf.delete(start_iter, end_iter)
-            insert_iter = buf.get_iter_at_offset(start_offset)
-            buf.insert(insert_iter, rep_text)
-
-        buf.end_revertable_change()
-        buf.set_modified(True)
-
-        # Update cursor to just after first replacement
-        if matches:
-            new_end = buf.get_iter_at_offset(matches[0][0])
-            new_end.forward_chars(len(rep_text))
-            buf.place_cursor(new_end)
-
-        GLib.idle_add(self._update_status_match, len(matches))
+        self._update_match_count()
         toast = Adw.Toast(title=f"Replaced {len(matches)} occurrence{'s' if len(matches) != 1 else ''}")
         toast.set_timeout(3)
-        GLib.idle_add(self.win.toast_overlay.add_toast, toast)
+        self.win.toast_overlay.add_toast(toast)
 
     # ------------------------------------------------------------------
-    # Status / visual helpers
+    # Helpers
     # ------------------------------------------------------------------
 
-    def _update_status_match(self, count):
-        """Update the editor's stats_label with match information."""
-        if count:
-            text = f"{count} match{'es' if count != 1 else ''}"
-        else:
-            text = "No matches"
-        self.win.stats_label.set_text(text)
+    def _find_matches(self, buf, text, flags):
+        matches = []
+        cursor = buf.get_start_iter()
+        while True:
+            result = self._forward_search(cursor, text, flags)
+            if result is None:
+                return matches
+            start, end = result
+            matches.append((start.get_offset(), end.get_offset()))
+            cursor = end
+
+    def _update_match_count(self):
+        buf = self.win.buffer
+        text = self.find_entry.get_text()
+        if buf is None or not text:
+            self.match_count_label.set_text("")
+            return
+        count = len(self._find_matches(buf, text, self._build_flags()))
+        self.match_count_label.set_text(
+            f"{count} match{'es' if count != 1 else ''}" if count else "No matches")
 
     def _flash_red(self):
-        """Flash the find entry border red for a brief moment."""
         self.find_entry.add_css_class("error")
         GLib.timeout_add_seconds(1, self._unflash_error)
 
-    def _find_next_after_replace(self, buf, find_text):
-        """After a successful replacement, find the next occurrence (no recursion)."""
-        if not find_text:
-            return
-        search_flags = self._build_flags()
-        it = buf.get_iter_at_mark(buf.get_insert())
-
-        found = False
-        match_iter = None
-
-        # Forward search from cursor position
-        result = it.forward_search(find_text, search_flags, len(find_text) + 1)
-        if result:
-            found, match_iter = result
-
-        if not found:
-            # Wrap around and search from the beginning
-            start_it = buf.get_start_iter()
-            result = start_it.forward_search(find_text, search_flags,
-                                             buf.get_end_iter().get_offset() - 1)
-            if result:
-                found, match_iter = result
-
-        if found and match_iter is not None:
-            start_iter = match_iter.copy()
-            end_iter = match_iter.copy()
-            end_iter.forward_chars(len(find_text))
-
-            buf.move_mark(buf.get_insert(), start_iter)
-            buf.move_mark(buf.get_selection_bound(), end_iter)
-            buf.place_cursor(start_iter)
-
-            # Scroll the view so the selection is visible.
-            self._scroll_to_selection(buf)
-
-            match_count = self._count_matches(buf, find_text, search_flags)
-            GLib.idle_add(self._update_status_match, match_count)
-
     def _unflash_error(self):
-        """Remove the error CSS class (always returns False to remove timeout)."""
-        if "error" in self.find_entry.get_css_classes():
-            self.find_entry.remove_css_class("error")
-        return False  # one-shot callback: do not repeat.
+        self.find_entry.remove_css_class("error")
+        return False

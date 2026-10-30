@@ -1,9 +1,8 @@
 import os
 
-from gi.repository import Gtk, Adw, Gio, GLib, Pango  # type: ignore
+from gi.repository import Gtk, Gio, GLib, Pango  # type: ignore
 
-from ollama import OllamaClient
-from ui_utils import _new_dialog, _show_dialog
+from ui_utils import _new_dialog, _show_dialog, _set_accessible_label
 
 
 class FileBrowser(Gtk.Box):
@@ -31,11 +30,13 @@ class FileBrowser(Gtk.Box):
 
         refresh_btn = Gtk.Button.new_from_icon_name("view-refresh-symbolic")
         refresh_btn.set_tooltip_text("Refresh file tree")
+        _set_accessible_label(refresh_btn, "Refresh file tree")
         refresh_btn.connect("clicked", lambda *_: self.rebuild_file_tree())
         header_bar.append(refresh_btn)
 
         close_btn = Gtk.Button.new_from_icon_name("window-close-symbolic")
         close_btn.set_tooltip_text("Close folder")
+        _set_accessible_label(close_btn, "Close folder")
         close_btn.connect("clicked", lambda *_: self.close_folder())
         header_bar.append(close_btn)
 
@@ -52,7 +53,7 @@ class FileBrowser(Gtk.Box):
         side_scrolled.set_child(self.file_list)
 
         self.file_list.connect("activate", self._on_list_activate)
-        self._rebuild_file_tree()
+        self.rebuild_file_tree()
 
     # --- public API -----------------------------------------------------------
 
@@ -68,7 +69,7 @@ class FileBrowser(Gtk.Box):
             return  # dismissed
         self.folder_root = gfile
         self.folder_label.set_text(gfile.get_basename() or gfile.get_path())
-        self._rebuild_file_tree()
+        self.rebuild_file_tree()
         self.win.side_toggle.set_visible(True)
         self.win.side_toggle.set_active(True)
         self.win._show_sidebar()
@@ -77,7 +78,7 @@ class FileBrowser(Gtk.Box):
         """Clear root folder and inform the window how to restore layout."""
         self.folder_root = None
         self.folder_label.set_text("No folder")
-        self._rebuild_file_tree()
+        self.rebuild_file_tree()
         self.win.side_toggle.set_visible(False)
         self.win.side_toggle.set_active(False)
         self.win._show_editor_only()
@@ -143,16 +144,6 @@ class FileBrowser(Gtk.Box):
         for child in self._list_dir_children(item):
             store.append(child)
         return store
-
-    def _rebuild_file_tree(self):
-        root_store = Gio.ListStore.new(Gio.File)
-        if self.folder_root is not None:
-            for child in self._list_dir_children(self.folder_root):
-                root_store.append(child)
-        self.win.tree_model = Gtk.TreeListModel.new(
-            root_store, False, False, self._create_dir_model)
-        sel = Gtk.SingleSelection.new(self.win.tree_model)
-        self.file_list.set_model(sel)
 
     def _on_tree_setup(self, _factory, list_item):
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -229,13 +220,6 @@ class FileBrowser(Gtk.Box):
         self.close_all_temp_tabs()
         self._open_temp_tab(path)
 
-    def _on_file_doubleclick(self, path):
-        """Handle double-click: open file permanently."""
-        if not path or os.path.isdir(path):
-            return
-        self.close_all_temp_tabs()
-        self.win.open_path_in_tab(path)
-
     def _open_temp_tab(self, path):
         """Open a file as a temporary tab (sidebar single-click)."""
         norm = os.path.realpath(path)
@@ -294,9 +278,10 @@ class FileBrowser(Gtk.Box):
         page = self.win._find_page(tab)
         if page is not None:
             page.set_title(f"~ {os.path.basename(path)}")
+            page.set_tooltip(
+                "Preview (~): activate this file again to keep it open. "
+                f"Opening another file replaces this preview.\n{path}")
             page.set_needs_attention(True)
-        page = self.win._find_page(tab)
-        if page is not None:
             self.win.tab_view.set_selected_page(page)
 
     def close_all_temp_tabs(self):
